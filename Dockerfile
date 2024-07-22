@@ -24,7 +24,7 @@ RUN go mod download &&\
 COPY cmd ./cmd
 COPY pkg ./pkg
 
-RUN go build -o gotenberg -ldflags "-X 'github.com/sortspke/gotenberg2/v8/cmd.Version=$GOTENBERG_VERSION'" cmd/gotenberg/main.go
+RUN go build -o gotenberg -ldflags "-X 'github.com/sortspoke/gotenberg2/v8/cmd.Version=$GOTENBERG_VERSION'" cmd/gotenberg/main.go
 
 # ----------------------------------------------
 # Final stage
