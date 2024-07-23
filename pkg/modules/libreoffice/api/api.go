@@ -131,6 +131,10 @@ type Options struct {
 	// PdfFormats allows to convert the resulting PDF to PDF/A-1b, PDF/A-2b,
 	// PDF/A-3b and PDF/UA.
 	PdfFormats gotenberg.PdfFormats
+
+	// Allows the passing in of a password for a password-protected office doc.
+	// Optional.
+	Password string
 }
 
 // DefaultOptions returns the default values for Options.

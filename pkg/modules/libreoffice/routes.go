@@ -54,6 +54,7 @@ func convertRoute(libreOffice libreofficeapi.Uno, engine gotenberg.PdfEngine) ap
 				pdfua                           bool
 				nativePdfFormats                bool
 				merge                           bool
+				password                        string
 				metadata                        map[string]interface{}
 			)
 
@@ -122,6 +123,7 @@ func convertRoute(libreOffice libreofficeapi.Uno, engine gotenberg.PdfEngine) ap
 				Bool("pdfua", &pdfua, false).
 				Bool("nativePdfFormats", &nativePdfFormats, true).
 				Bool("merge", &merge, false).
+				String("password", &password, "").
 				Custom("metadata", func(value string) error {
 					if len(value) > 0 {
 						err := json.Unmarshal([]byte(value), &metadata)
@@ -167,6 +169,7 @@ func convertRoute(libreOffice libreofficeapi.Uno, engine gotenberg.PdfEngine) ap
 					Quality:                         quality,
 					ReduceImageResolution:           reduceImageResolution,
 					MaxImageResolution:              maxImageResolution,
+					Password:                        password,
 				}
 
 				if nativePdfFormats {
