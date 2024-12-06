@@ -1,7 +1,7 @@
 # ARG instructions do not create additional layers. Instead, next layers will
 # concatenate them. Also, we have to repeat ARG instructions in each build
 # stage that uses them.
-ARG GOLANG_VERSION
+ARG GOLANG_VERSION=1.23
 
 # ----------------------------------------------
 # pdfcpu binary build stage
@@ -11,7 +11,7 @@ ARG GOLANG_VERSION
 
 FROM golang:$GOLANG_VERSION AS pdfcpu-binary-stage
 
-ARG PDFCPU_VERSION
+ARG PDFCPU_VERSION=v0.8.1
 ENV CGO_ENABLED=0
 
 # Define the working directory outside of $GOPATH (we're using go modules).
@@ -33,7 +33,7 @@ RUN go build -o pdfcpu -ldflags "-s -w -X 'main.version=$PDFCPU_VERSION' -X 'git
 # ----------------------------------------------
 FROM golang:$GOLANG_VERSION AS gotenberg-binary-stage
 
-ARG GOTENBERG_VERSION
+ARG GOTENBERG_VERSION=snapshot
 ENV CGO_ENABLED=0
 
 # Define the working directory outside of $GOPATH (we're using go modules).
@@ -56,11 +56,11 @@ RUN go build -o gotenberg -ldflags "-X 'github.com/gotenberg/gotenberg/v8/cmd.Ve
 # ----------------------------------------------
 FROM debian:12-slim
 
-ARG GOTENBERG_VERSION
-ARG GOTENBERG_USER_GID
-ARG GOTENBERG_USER_UID
-ARG NOTO_COLOR_EMOJI_VERSION
-ARG PDFTK_VERSION
+ARG GOTENBERG_VERSION=snapshot
+ARG GOTENBERG_USER_GID=1001
+ARG GOTENBERG_USER_UID=1001
+ARG NOTO_COLOR_EMOJI_VERSION=v2.047
+ARG PDFTK_VERSION=v3.3.3
 ARG TMP_CHOMIUM_VERSION_ARMHF="116.0.5845.180-1~deb12u1"
 
 LABEL org.opencontainers.image.title="Gotenberg" \
