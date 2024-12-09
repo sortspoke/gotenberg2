@@ -57,6 +57,7 @@ func convertRoute(libreOffice libreofficeapi.Uno, engine gotenberg.PdfEngine) ap
 				maxImageResolution              int
 				nativePdfFormats                bool
 				merge                           bool
+				outputFormat                    string
 			)
 
 			err := form.
@@ -123,6 +124,7 @@ func convertRoute(libreOffice libreofficeapi.Uno, engine gotenberg.PdfEngine) ap
 				}).
 				Bool("nativePdfFormats", &nativePdfFormats, true).
 				Bool("merge", &merge, false).
+				String("outputFormat", &outputFormat, defaultOptions.OutputFormat).
 				Custom("metadata", func(value string) error {
 					if len(value) > 0 {
 						err := json.Unmarshal([]byte(value), &metadata)
@@ -139,7 +141,9 @@ func convertRoute(libreOffice libreofficeapi.Uno, engine gotenberg.PdfEngine) ap
 
 			outputPaths := make([]string, len(inputPaths))
 			for i, inputPath := range inputPaths {
-				outputPaths[i] = ctx.GeneratePath(".pdf")
+				var ext = "." + outputFormat;
+				outputPaths[i] = ctx.GeneratePath(ext)
+
 				options := libreofficeapi.Options{
 					Password:                        password,
 					Landscape:                       landscape,
@@ -163,6 +167,7 @@ func convertRoute(libreOffice libreofficeapi.Uno, engine gotenberg.PdfEngine) ap
 					Quality:                         quality,
 					ReduceImageResolution:           reduceImageResolution,
 					MaxImageResolution:              maxImageResolution,
+					OutputFormat:                    outputFormat,
 				}
 
 				if nativePdfFormats {
@@ -199,39 +204,42 @@ func convertRoute(libreOffice libreofficeapi.Uno, engine gotenberg.PdfEngine) ap
 				}
 			}
 
-			if merge {
-				outputPath, err := pdfengines.MergeStub(ctx, engine, outputPaths)
-				if err != nil {
-					return fmt.Errorf("merge PDFs: %w", err)
-				}
-
-				// Only one output path.
-				outputPaths = []string{outputPath}
-			}
-
-			if !nativePdfFormats {
-				outputPaths, err = pdfengines.ConvertStub(ctx, engine, pdfFormats, outputPaths)
-				if err != nil {
-					return fmt.Errorf("convert PDFs: %w", err)
-				}
-			}
-
-			err = pdfengines.WriteMetadataStub(ctx, engine, metadata, outputPaths)
-			if err != nil {
-				return fmt.Errorf("write metadata: %w", err)
-			}
-
-			if len(outputPaths) > 1 {
-				// If .zip archive, document.docx -> document.docx.pdf.
-				for i, inputPath := range inputPaths {
-					outputPath := fmt.Sprintf("%s.pdf", inputPath)
-
-					err = ctx.Rename(outputPaths[i], outputPath)
+			// Options only supported with PDF output.
+			if outputFormat == "pdf" {
+				if merge {
+					outputPath, err := pdfengines.MergeStub(ctx, engine, outputPaths)
 					if err != nil {
-						return fmt.Errorf("rename output path: %w", err)
+						return fmt.Errorf("merge PDFs: %w", err)
 					}
+	
+					// Only one output path.
+					outputPaths = []string{outputPath}
+				}
+	
+				if !nativePdfFormats {
+					outputPaths, err = pdfengines.ConvertStub(ctx, engine, pdfFormats, outputPaths)
+					if err != nil {
+						return fmt.Errorf("convert PDFs: %w", err)
+					}
+				}
 
-					outputPaths[i] = outputPath
+				err = pdfengines.WriteMetadataStub(ctx, engine, metadata, outputPaths)
+				if err != nil {
+					return fmt.Errorf("write metadata: %w", err)
+				}
+
+				if len(outputPaths) > 1 {
+					// If .zip archive, document.docx -> document.docx.pdf.
+					for i, inputPath := range inputPaths {
+						outputPath := fmt.Sprintf("%s.pdf", inputPath)
+
+						err = ctx.Rename(outputPaths[i], outputPath)
+						if err != nil {
+							return fmt.Errorf("rename output path: %w", err)
+						}
+
+						outputPaths[i] = outputPath
+					}
 				}
 			}
 
