@@ -13,6 +13,7 @@ import (
 	"github.com/gotenberg/gotenberg/v8/pkg/gotenberg"
 	"github.com/gotenberg/gotenberg/v8/pkg/modules/api"
 	libreofficeapi "github.com/gotenberg/gotenberg/v8/pkg/modules/libreoffice/api"
+	"github.com/gotenberg/gotenberg/v8/pkg/modules/pdfengines"
 )
 
 // convertRoute returns an [api.Route] which can convert LibreOffice documents
@@ -26,9 +27,13 @@ func convertRoute(libreOffice libreofficeapi.Uno, engine gotenberg.PdfEngine) ap
 			ctx := c.Get("context").(*api.Context)
 			defaultOptions := libreofficeapi.DefaultOptions()
 
-			// Let's get the data from the form and validate them.
+			form := ctx.FormData()
+			pdfFormats := pdfengines.FormDataPdfFormats(form)
+			metadata := pdfengines.FormDataPdfMetadata(form)
+
 			var (
 				inputPaths                      []string
+				password                        string
 				landscape                       bool
 				nativePageRanges                string
 				exportFormFields                bool
@@ -50,16 +55,14 @@ func convertRoute(libreOffice libreofficeapi.Uno, engine gotenberg.PdfEngine) ap
 				quality                         int
 				reduceImageResolution           bool
 				maxImageResolution              int
-				pdfa                            string
-				pdfua                           bool
 				nativePdfFormats                bool
 				merge                           bool
-				password                        string
-				metadata                        map[string]interface{}
+				outputFormat                    string
 			)
 
-			err := ctx.FormData().
+			err := form.
 				MandatoryPaths(libreOffice.Extensions(), &inputPaths).
+				String("password", &password, defaultOptions.Password).
 				Bool("landscape", &landscape, defaultOptions.Landscape).
 				String("nativePageRanges", &nativePageRanges, defaultOptions.PageRanges).
 				Bool("exportFormFields", &exportFormFields, defaultOptions.ExportFormFields).
@@ -119,11 +122,9 @@ func convertRoute(libreOffice libreofficeapi.Uno, engine gotenberg.PdfEngine) ap
 					maxImageResolution = intValue
 					return nil
 				}).
-				String("pdfa", &pdfa, "").
-				Bool("pdfua", &pdfua, false).
 				Bool("nativePdfFormats", &nativePdfFormats, true).
 				Bool("merge", &merge, false).
-				String("password", &password, "").
+				String("outputFormat", &outputFormat, defaultOptions.OutputFormat).
 				Custom("metadata", func(value string) error {
 					if len(value) > 0 {
 						err := json.Unmarshal([]byte(value), &metadata)
@@ -138,16 +139,13 @@ func convertRoute(libreOffice libreofficeapi.Uno, engine gotenberg.PdfEngine) ap
 				return fmt.Errorf("validate form data: %w", err)
 			}
 
-			pdfFormats := gotenberg.PdfFormats{
-				PdfA:  pdfa,
-				PdfUa: pdfua,
-			}
-
-			// Alright, let's convert each document to PDF.
 			outputPaths := make([]string, len(inputPaths))
 			for i, inputPath := range inputPaths {
-				outputPaths[i] = ctx.GeneratePath(".pdf")
+				var ext = "." + outputFormat;
+				outputPaths[i] = ctx.GeneratePath(ext)
+
 				options := libreofficeapi.Options{
+					Password:                        password,
 					Landscape:                       landscape,
 					PageRanges:                      nativePageRanges,
 					ExportFormFields:                exportFormFields,
@@ -169,7 +167,7 @@ func convertRoute(libreOffice libreofficeapi.Uno, engine gotenberg.PdfEngine) ap
 					Quality:                         quality,
 					ReduceImageResolution:           reduceImageResolution,
 					MaxImageResolution:              maxImageResolution,
-					Password:                        password,
+					OutputFormat:                    outputFormat,
 				}
 
 				if nativePdfFormats {
@@ -188,10 +186,17 @@ func convertRoute(libreOffice libreofficeapi.Uno, engine gotenberg.PdfEngine) ap
 						)
 					}
 
-					if errors.Is(err, libreofficeapi.ErrMalformedPageRanges) {
+					if errors.Is(err, libreofficeapi.ErrUnoException) {
 						return api.WrapError(
 							fmt.Errorf("convert to PDF: %w", err),
-							api.NewSentinelHttpError(http.StatusBadRequest, fmt.Sprintf("Malformed page ranges '%s' (nativePageRanges)", options.PageRanges)),
+							api.NewSentinelHttpError(http.StatusBadRequest, fmt.Sprintf("LibreOffice failed to process a document: possible causes include malformed page ranges '%s' (nativePageRanges), or, if a password has been provided, it may not be required. In any case, the exact cause is uncertain.", options.PageRanges)),
+						)
+					}
+
+					if errors.Is(err, libreofficeapi.ErrRuntimeException) {
+						return api.WrapError(
+							fmt.Errorf("convert to PDF: %w", err),
+							api.NewSentinelHttpError(http.StatusBadRequest, "LibreOffice failed to process a document: a password may be required, or, if one has been given, it is invalid. In any case, the exact cause is uncertain."),
 						)
 					}
 
@@ -199,65 +204,45 @@ func convertRoute(libreOffice libreofficeapi.Uno, engine gotenberg.PdfEngine) ap
 				}
 			}
 
-			// So far so good, let's check if we have to merge the PDFs.
-			if len(outputPaths) > 1 && merge {
-				outputPath := ctx.GeneratePath(".pdf")
+			// Options only supported with PDF output.
+			if outputFormat == "pdf" {
+				if merge {
+					outputPath, err := pdfengines.MergeStub(ctx, engine, outputPaths)
+					if err != nil {
+						return fmt.Errorf("merge PDFs: %w", err)
+					}
+	
+					// Only one output path.
+					outputPaths = []string{outputPath}
+				}
+	
+				if !nativePdfFormats {
+					outputPaths, err = pdfengines.ConvertStub(ctx, engine, pdfFormats, outputPaths)
+					if err != nil {
+						return fmt.Errorf("convert PDFs: %w", err)
+					}
+				}
 
-				err = engine.Merge(ctx, ctx.Log(), outputPaths, outputPath)
+				err = pdfengines.WriteMetadataStub(ctx, engine, metadata, outputPaths)
 				if err != nil {
-					return fmt.Errorf("merge PDFs: %w", err)
+					return fmt.Errorf("write metadata: %w", err)
 				}
 
-				// Only one output path.
-				outputPaths = []string{outputPath}
-			}
+				if len(outputPaths) > 1 {
+					// If .zip archive, document.docx -> document.docx.pdf.
+					for i, inputPath := range inputPaths {
+						outputPath := fmt.Sprintf("%s.pdf", inputPath)
 
-			// Let's check if the client want to convert each PDF to a specific
-			// PDF format.
-			zeroValued := gotenberg.PdfFormats{}
-			if !nativePdfFormats && pdfFormats != zeroValued {
-				convertOutputPaths := make([]string, len(outputPaths))
+						err = ctx.Rename(outputPaths[i], outputPath)
+						if err != nil {
+							return fmt.Errorf("rename output path: %w", err)
+						}
 
-				for i, outputPath := range outputPaths {
-					convertInputPath := outputPath
-					convertOutputPaths[i] = ctx.GeneratePath(".pdf")
-
-					err = engine.Convert(ctx, ctx.Log(), pdfFormats, convertInputPath, convertOutputPaths[i])
-					if err != nil {
-						return fmt.Errorf("convert PDF: %w", err)
-					}
-				}
-
-				// Important: the output paths are now the converted files.
-				outputPaths = convertOutputPaths
-			}
-
-			// Writes and potentially overrides metadata entries, if any.
-			if len(metadata) > 0 {
-				for _, outputPath := range outputPaths {
-					err = engine.WriteMetadata(ctx, ctx.Log(), metadata, outputPath)
-					if err != nil {
-						return fmt.Errorf("write metadata: %w", err)
+						outputPaths[i] = outputPath
 					}
 				}
 			}
 
-			if len(outputPaths) > 1 {
-				// If .zip archive, document.docx -> document.docx.pdf.
-				for i, inputPath := range inputPaths {
-					outputPath := fmt.Sprintf("%s.pdf", inputPath)
-
-					err = ctx.Rename(outputPaths[i], outputPath)
-					if err != nil {
-						return fmt.Errorf("rename output path: %w", err)
-					}
-
-					outputPaths[i] = outputPath
-				}
-			}
-
-			// Last but not least, add the output paths to the context so that
-			// the API is able to send them as a response to the client.
 			err = ctx.AddOutputPaths(outputPaths...)
 			if err != nil {
 				return fmt.Errorf("add output paths: %w", err)

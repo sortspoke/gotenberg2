@@ -1,12 +1,37 @@
 # ARG instructions do not create additional layers. Instead, next layers will
 # concatenate them. Also, we have to repeat ARG instructions in each build
 # stage that uses them.
-ARG GOLANG_VERSION=1.22
+ARG GOLANG_VERSION=1.23
+
+# ----------------------------------------------
+# pdfcpu binary build stage
+# ----------------------------------------------
+# Note: this stage is required as pdfcpu does not release an armhf variant by
+# default.
+
+FROM golang:$GOLANG_VERSION AS pdfcpu-binary-stage
+
+ARG PDFCPU_VERSION=v0.8.1
+ENV CGO_ENABLED=0
+
+# Define the working directory outside of $GOPATH (we're using go modules).
+WORKDIR /home
+
+RUN curl -Ls "https://github.com/pdfcpu/pdfcpu/archive/refs/tags/$PDFCPU_VERSION.tar.gz" -o pdfcpu.tar.gz &&\
+    tar --strip-components=1 -xvzf pdfcpu.tar.gz
+
+# Install module dependencies.
+RUN go mod download &&\
+    go mod verify
+
+RUN go build -o pdfcpu -ldflags "-s -w -X 'main.version=$PDFCPU_VERSION' -X 'github.com/pdfcpu/pdfcpu/pkg/pdfcpu.VersionStr=$PDFCPU_VERSION' -X main.builtBy=gotenberg" ./cmd/pdfcpu &&\
+    # Verify installation.
+    ./pdfcpu version
 
 # ----------------------------------------------
 # Gotenberg binary build stage
 # ----------------------------------------------
-FROM golang:$GOLANG_VERSION AS binary-stage
+FROM golang:$GOLANG_VERSION AS gotenberg-binary-stage
 
 ARG GOTENBERG_VERSION=snapshot
 ENV CGO_ENABLED=0
@@ -24,7 +49,7 @@ RUN go mod download &&\
 COPY cmd ./cmd
 COPY pkg ./pkg
 
-RUN go build -o gotenberg -ldflags "-X 'github.com/sortspoke/gotenberg2/v8/cmd.Version=$GOTENBERG_VERSION'" cmd/gotenberg/main.go
+RUN go build -o gotenberg -ldflags "-X 'github.com/gotenberg/gotenberg/v8/cmd.Version=$GOTENBERG_VERSION'" cmd/gotenberg/main.go
 
 # ----------------------------------------------
 # Final stage
@@ -34,7 +59,7 @@ FROM debian:12-slim
 ARG GOTENBERG_VERSION=snapshot
 ARG GOTENBERG_USER_GID=1001
 ARG GOTENBERG_USER_UID=1001
-ARG NOTO_COLOR_EMOJI_VERSION=v2.042
+ARG NOTO_COLOR_EMOJI_VERSION=v2.047
 ARG PDFTK_VERSION=v3.3.3
 ARG TMP_CHOMIUM_VERSION_ARMHF="116.0.5845.180-1~deb12u1"
 
@@ -187,8 +212,11 @@ RUN \
 # https://github.com/arachnys/athenapdf/commit/ba25a8d80a25d08d58865519c4cd8756dc9a336d.
 COPY build/fonts.conf /etc/fonts/conf.d/100-gotenberg.conf
 
-# Copy the Gotenberg binary from the binary stage.
-COPY --from=binary-stage /home/gotenberg /usr/bin/
+# Copy the pdfcpu binary from the pdfcpu-binary-stage.
+COPY --from=pdfcpu-binary-stage /home/pdfcpu /usr/bin/
+
+# Copy the Gotenberg binary from the gotenberg-binary-stage.
+COPY --from=gotenberg-binary-stage /home/gotenberg /usr/bin/
 
 # Environment variables required by modules or else.
 ENV CHROMIUM_BIN_PATH=/usr/bin/chromium
@@ -197,6 +225,7 @@ ENV UNOCONVERTER_BIN_PATH=/usr/bin/unoconverter
 ENV PDFTK_BIN_PATH=/usr/bin/pdftk
 ENV QPDF_BIN_PATH=/usr/bin/qpdf
 ENV EXIFTOOL_BIN_PATH=/usr/bin/exiftool
+ENV PDFCPU_BIN_PATH=/usr/bin/pdfcpu
 
 USER gotenberg
 WORKDIR /home/gotenberg
